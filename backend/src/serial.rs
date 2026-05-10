@@ -36,7 +36,47 @@ pub type SharedState = Arc<Mutex<SerialState>>;
 pub type WsTx = broadcast::Sender<String>;
 
 pub fn list_ports() -> Vec<serialport::SerialPortInfo> {
-    serialport::available_ports().unwrap_or_default()
+    serialport::available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| is_valid_port(&p.port_name))
+        .collect()
+}
+
+fn is_valid_port(name: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        // USB serial adapters, USB CDC ACM, Raspberry Pi UART, Bluetooth, Exar
+        const USB_PREFIXES: &[&str] = &[
+            "/dev/ttyUSB",
+            "/dev/ttyACM",
+            "/dev/ttyAMA",
+            "/dev/ttyXRUSB",
+            "/dev/rfcomm",
+        ];
+        if USB_PREFIXES.iter().any(|p| name.starts_with(p)) {
+            return true;
+        }
+        // ttyS0–3: physical RS-232 headers on motherboards
+        if let Some(n) = name.strip_prefix("/dev/ttyS") {
+            return n.parse::<u32>().map(|n| n <= 3).unwrap_or(false);
+        }
+        false
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // cu.* = call-up device, doesn't block on open unlike tty.*
+        name.starts_with("/dev/cu.")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        name.starts_with("COM")
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = name;
+        true
+    }
 }
 
 pub fn open_port(state: &mut SerialState, port_name: &str, baud_rate: u32) -> Result<(), String> {
